@@ -373,6 +373,13 @@ public class PlayerBase : MonoBehaviour
             rb.linearVelocity = new Vector2(rb.linearVelocity.x, math.max(rb.linearVelocity.y, airJumpForce));
             canJump = false;
         }
+        else if (!isDashing && isOnWall)
+        {
+            CancelJump();
+            rb.linearVelocity = new Vector2(direction * xWallJumpForce, yWallJumpForce);
+            canJump = true;
+            canDash = true;
+        }
     }
 
 
