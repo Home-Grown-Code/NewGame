@@ -12,3 +12,4 @@ Also, Copilot is very helpful in identifying why random errors happen, like why 
 ### Day 4-5
 I was in the car on the way to WI for Thanksgiving; I rewrote the Mantle system because the old way would not work well once animated. After that, I started working on my own pixel art for
 a tile system im not sure if I will use one yet, but it's good for testing at least.
+<img width="192" height="64" alt="grassTilesOne" src="https://github.com/user-attachments/assets/da08fc5d-0503-45ec-afaa-4d8f12b04dca" />
