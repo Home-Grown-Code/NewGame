@@ -1,33 +1,9 @@
 using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Data.Common;
-using System.Linq;
-using JetBrains.Annotations;
-using NUnit.Framework;
-using Unity.Collections.Tests.CoreCLR.TestJobs;
 using Unity.Mathematics;
-using Unity.Tutorials.Editor;
-using Unity.VisualScripting;
-using UnityEditor.Callbacks;
-using UnityEditor.Experimental.GraphView;
-using UnityEditor.Tilemaps;
-using UnityEditor.U2D.Aseprite;
 using UnityEngine;
-using UnityEngine.InputSystem;
-using UnityEngine.SearchService;
-using UnityEngine.SocialPlatforms;
-using UnityEngine.Serialization;
 
 public class PlayerBase : MonoBehaviour
 {
-    private enum MantlePhase
-    {
-        Rising,
-        MovingForward,
-        Descending
-    }
-
     // Vereables
 
     // Game Components
@@ -37,57 +13,45 @@ public class PlayerBase : MonoBehaviour
     protected SpriteRenderer sr;
 
     // Veriables
-
     [Header("Movement")]
-    [SerializeField] private float movementSpeed = 4f;
+    [SerializeField] private float movementSpeed = 3f;
 
     [Header("Jump")]
     [SerializeField] private float groundJumpForce = 8f;
     [SerializeField] private float airJumpForce = 7f;
     [SerializeField] private float maxJumpSteps = 12f;
     [SerializeField] private float coyoteTime = 0.2f;
-    [SerializeField] private float maxFallSpeed = 18f;
+    [SerializeField] private float maxFallSpeed = 12f;
 
     [Header("Dash")]
-    [SerializeField] private float maxDashSteps = 20f;
-    [SerializeField] private float dashSpeed = 10f;
+    [SerializeField] private float maxDashSteps = 15f;
+    [SerializeField] private float dashSpeed = 6f;
+    [SerializeField] private float dashCooldown;
 
     [Header("Wall Movement")]
-    [SerializeField] private float stickDuration = 0.3f;
+    [SerializeField] private float stickDuration = 1f;
     [SerializeField] private float wallSlideSpeed = 2;
     [SerializeField] private float stickTimer = 0;
     [SerializeField] private float xWallJumpForce = 5;
     [SerializeField] private float yWallJumpForce = 8;
 
     [Header("Mantle")]
-    [SerializeField] private Transform mantleWallCheckPoint;
-    [SerializeField] private Transform mantleLedgeCheckPoint;
-    [FormerlySerializedAs("mantleEyeLevelCheckPoint")]
-    [FormerlySerializedAs("mantleChestCheckPoint")]
-    [SerializeField] private Transform mantleHeadLevelCheckPoint;
-    [SerializeField] private LayerMask mantleZoneLayer;
-    [SerializeField] private float mantleSearchRadius = 0.25f;
-    [SerializeField] private float mantleCheckDistance = 0.4f;
-    [SerializeField] private float mantleRayLength = 1.2f;
-    [SerializeField] private float mantleMoveSpeed = 4f;
-    [SerializeField] private float mantleMaxRise = 2f;
-    [SerializeField] private AnimationCurve mantleMotionCurve =
-        AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
-    [SerializeField] private float mantleJumpForce = 14f;
-    [SerializeField] private float mantleRayStartHeight = 0.8f;
-
-    [Header("Mantle State")]
-    [SerializeField] private bool mantleZoneUsed;
-    [SerializeField] private bool mantleJumpCancelRequested;
-    [SerializeField] private Vector2 mantleStart;
-    [SerializeField] private Vector2 mantleTarget;
-    [SerializeField] private float mantleOriginalGravity;
-    [SerializeField] private RigidbodyInterpolation2D mantleOriginalInterpolation;
-    [SerializeField] private MantlePhase mantlePhase;
-    [SerializeField] private Vector2 mantlePhaseStart;
-    [SerializeField] private Vector2 mantlePhaseTarget;
-    [SerializeField] private float mantlePhaseDuration;
-    [SerializeField] private float mantlePhaseElapsed;
+    [SerializeField] private Transform topMantleCheckPoint;
+    [SerializeField] private Transform bottomMantleCheckPoint;
+    [SerializeField] private bool topMantlePointTouching;
+    [SerializeField] private bool bottomMantlePointTouching;
+    [SerializeField] private bool isInMantlePostition;
+    [SerializeField] private Vector2 bottomMantlePoint;
+    [SerializeField] private Vector2 topMantlePoint;
+    [SerializeField] private float mantleTime;
+    [SerializeField] private float mantleTimer;
+    [SerializeField] private float mantleJumpForce = 6f;
+    [SerializeField] private float bottomMantlePointOffsetX;
+    [SerializeField] private float bottomMantlePointOffsetY;
+    [SerializeField] private float topMantlePointOffsetX;
+    [SerializeField] private float topMantlePointOffsetY;
+    [SerializeField] private bool topWallDoubleCheck;
+    [SerializeField] private Transform topDoubleCheckPoint;
 
     [Header("Collision details")]
     [SerializeField] private float groundCheckDisance = 0.69f;
@@ -100,8 +64,6 @@ public class PlayerBase : MonoBehaviour
     [SerializeField] private float yRayOffsetUpTwo = 0.1f;
     [SerializeField] private float yRayOffsetDownOne = -0.425f;
     [SerializeField] private float yRayOffsetDownTwo = -0.6f;
-    [SerializeField] private LayerMask mantleObstacleLayers;
-
 
     //States
     [Header("States")]
@@ -112,7 +74,7 @@ public class PlayerBase : MonoBehaviour
     [SerializeField] private bool isRunning;
     [SerializeField] private bool isOnWall;
     [SerializeField] private bool isWallSliding;
-    [SerializeField] private bool isMantling;
+    [SerializeField] private bool isMantleing;
 
     // Others
     [Header("Others")]
@@ -143,15 +105,12 @@ public class PlayerBase : MonoBehaviour
 
     void Update()
     {
-        HandleInput();
-        if (isMantling)
+        if (isMantleing)
         {
-            if (Input.GetKeyDown(KeyCode.Z))
-                mantleJumpCancelRequested = true;
-
             HandleAnimations();
             return;
         }
+        HandleInput();
         HandleDash();
         HandleRunning();
         HandleJump();
@@ -166,29 +125,15 @@ public class PlayerBase : MonoBehaviour
         velocityY = rb.linearVelocity.y;
         wallJumpLockTimer = Mathf.Max(0f, wallJumpLockTimer - Time.fixedDeltaTime);
 
-        // Commands
-        if (isMantling)
+        // Commands;
+        //HandleMantle();
+        //HandleMantling();
+        if (isMantleing)
         {
-            AdvanceMantle();
+            rb.linearVelocity = new Vector2(0f, 0f);
             return;
         }
-        HandleMantling();
         HandleCollision();
-        bool inMantleZone =
-            mantleLedgeCheckPoint != null &&
-            Physics2D.OverlapCircle(
-                mantleLedgeCheckPoint.position,
-                mantleSearchRadius,
-                mantleZoneLayer) != null;
-
-        if (!inMantleZone)
-            mantleZoneUsed = false;
-
-        if (inMantleZone && !mantleZoneUsed && TryStartMantle())
-        {
-            mantleZoneUsed = true;
-            return;
-        }
         HandleFlip();
         HandleMovement();
         HandleRunning();
@@ -197,43 +142,81 @@ public class PlayerBase : MonoBehaviour
         HandleJumping();
     }
 
-    private void HandleReturn()
-    {
-        if (!isGrounded && !isDashing && TryStartMantle())
-        {
-            return;
-        }
-    }
+
+    // Spesific Commands
     private void HandleMantle()
     {
-        if (isMantling)
-        {
-            if (Input.GetKeyDown(KeyCode.Z))
-            {
-                mantleJumpCancelRequested = true;
-            }
+        bottomMantlePointTouching = Physics2D.Raycast(bottomMantleCheckPoint.position, transform.right, wallCheckDistance + 0.1f, whatIsGround);
+        topMantlePointTouching = Physics2D.Raycast(topMantleCheckPoint.position, transform.right, wallCheckDistance + 0.1f, whatIsGround);
+        topWallDoubleCheck = Physics2D.Raycast(topDoubleCheckPoint.position, transform.right, wallCheckDistance + 0.1f, whatIsGround);
 
-            HandleAnimations();
-            return;
+        isInMantlePostition = !topMantlePointTouching && bottomMantlePointTouching && topWallDoubleCheck;
+        if (isInMantlePostition)
+        {
+            TryToMantle();
+        }
+    }
+
+    private void TryToMantle()
+    {
+        if (!Input.GetKeyDown(KeyCode.Z))
+        {
+            if (!isMantleing && !isGrounded)
+            {
+                isMantleing = true;
+                isGrounded = false;
+                isDashing = false;
+                isJumping = false;
+                isRunning = false;
+                isOnWall = false;
+                isWallSliding = false;
+                mantleTimer = mantleTime;
+                bottomMantlePoint = new Vector2(MathF.Floor(transform.position.x + (isFacingRight ? 0.85f : 0f)) + (isFacingRight ? -bottomMantlePointOffsetX : bottomMantlePointOffsetX), MathF.Floor(transform.position.y) + bottomMantlePointOffsetY);
+                topMantlePoint = new Vector2(MathF.Floor(bottomMantlePoint.x) + (topMantlePointOffsetX * (isFacingRight ? 1f : -1f)), MathF.Floor(topMantleCheckPoint.position.y + topMantlePointOffsetY));
+            }
         }
     }
 
     private void HandleMantling()
     {
-        if (isMantling)
+        if (isMantleing)
         {
-            AdvanceMantle();
-            return;
+            if (!Input.GetKey(KeyCode.Z))
+            {
+                if (isMantleing && mantleTimer >= 0f && topWallDoubleCheck)
+                {
+                    transform.position = bottomMantlePoint;
+                    mantleTimer -= Time.fixedDeltaTime;
+                }
+                if (!topWallDoubleCheck)
+                {
+                    bottomMantlePoint = new Vector2(MathF.Floor(transform.position.x), MathF.Floor(transform.position.y) + 1f);
+                    topMantlePoint = new Vector2(MathF.Floor(bottomMantlePoint.x) + (topMantlePointOffsetX * (isFacingRight ? 1f : -1f)), MathF.Floor(topMantleCheckPoint.position.y + topMantlePointOffsetY));
+                }
+            }
+            else if (Input.GetKey(KeyCode.Z))
+            {
+                isMantleing = false;
+                MantleJump();
+            }
+
+            if (isMantleing && mantleTimer < 0f && !Input.GetKey(KeyCode.Z))
+            {
+                transform.position = topMantlePoint;
+                isMantleing = false;
+                rb.linearVelocity = new Vector2(0f, 0f);
+            }
         }
     }
 
-    // Spesific Commands
+    private void MantleJump()
+    {
+        transform.position = new Vector2(bottomMantlePoint.x, bottomMantlePoint.y + 1f);
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, mantleJumpForce);
+    }
+
     private void HandleWallSlide()
     {
-        if (isMantling)
-        {
-            isOnWall = false;
-        }
         if (isOnWall)
         {
             isDashing = false;
@@ -290,11 +273,20 @@ public class PlayerBase : MonoBehaviour
                 dashSteps++;
                 isDashing = false;
                 isRunning = true;
+                dashCooldown = 1f;
             }
         }
     }
     private void HandleDash()
     {
+        if (dashCooldown > 0)
+        {
+            dashCooldown -= Time.fixedDeltaTime;
+            if (dashCooldown <= 0f)
+            {
+                canDash = false;
+            }
+        }
         if (Input.GetKeyDown(KeyCode.C) && canDash)
         {
             isDashing = true;
@@ -331,7 +323,6 @@ public class PlayerBase : MonoBehaviour
     {
         Vector2 xRayOriginOne = (Vector2)transform.position + new Vector2(xRayOffsetLeft, 0);
         Vector2 xRayOriginTwo = (Vector2)transform.position + new Vector2(xRayOffsetRight, 0);
-        isGrounded = (Physics2D.Raycast(xRayOriginOne, Vector2.down, groundCheckDisance, whatIsGround) || Physics2D.Raycast(xRayOriginTwo, Vector2.down, groundCheckDisance, whatIsGround) || Physics2D.Raycast(transform.position, Vector2.down, groundCheckDisance, whatIsGround));
         Vector2 yRayOriginOne = (Vector2)transform.position + new Vector2(0, yRayOffsetUpOne);
         Vector2 yRayOriginTwo = (Vector2)transform.position + new Vector2(0, yRayOffsetUpTwo);
         Vector2 yRayOriginThree = (Vector2)transform.position + new Vector2(0, yRayOffsetDownOne);
@@ -347,6 +338,7 @@ public class PlayerBase : MonoBehaviour
             yRayOriginFour
         };
 
+        isGrounded = (Physics2D.Raycast(xRayOriginOne, Vector2.down, groundCheckDisance, whatIsGround) || Physics2D.Raycast(xRayOriginTwo, Vector2.down, groundCheckDisance, whatIsGround) || Physics2D.Raycast(transform.position, Vector2.down, groundCheckDisance, whatIsGround));
         isOnWall = false;
 
         foreach (Vector2 origin in wallRayOrigins)
@@ -535,221 +527,12 @@ public class PlayerBase : MonoBehaviour
         }
     }
 
-    private bool TryStartMantle()
-    {
-        if (mantleLedgeCheckPoint == null || mantleHeadLevelCheckPoint == null)
-            return false;
-        Vector2 direction = isFacingRight ? Vector2.right : Vector2.left;
-
-        if (Physics2D.OverlapCircle(
-                mantleLedgeCheckPoint.position,
-                mantleSearchRadius,
-                mantleZoneLayer) == null)
-        {
-            mantleZoneUsed = false;
-            return false;
-        }
-
-        Vector2 downRayOrigin =
-            (Vector2)mantleLedgeCheckPoint.position
-            + direction * mantleCheckDistance
-            + Vector2.up * mantleRayStartHeight;
-
-        RaycastHit2D surfaceHit = Physics2D.Raycast(
-            downRayOrigin,
-            Vector2.down,
-            mantleRayLength + mantleRayStartHeight,
-            whatIsGround);
-
-        float colliderBottomOffset = col.bounds.min.y - transform.position.y;
-        Vector2 landingPoint = surfaceHit.collider != null
-            ? surfaceHit.point
-            : (Vector2)mantleLedgeCheckPoint.position + direction * mantleCheckDistance;
-        if (landingPoint.y > mantleHeadLevelCheckPoint.position.y)
-            return false;
-
-        mantleTarget = new Vector2(
-            landingPoint.x,
-            Mathf.Max(
-                landingPoint.y - colliderBottomOffset,
-                mantleLedgeCheckPoint.position.y - colliderBottomOffset));
-
-        mantleStart = rb.position;
-        BeginMantlePhase(
-            MantlePhase.Rising,
-            mantleStart,
-            new Vector2(mantleStart.x, mantleStart.y + mantleMaxRise));
-        mantleOriginalGravity = rb.gravityScale;
-        mantleOriginalInterpolation = rb.interpolation;
-        mantleJumpCancelRequested = false;
-
-        rb.gravityScale = 0f;
-        rb.interpolation = RigidbodyInterpolation2D.Interpolate;
-        rb.linearVelocity = Vector2.zero;
-        isMantling = true;
-        return true;
-    }
-
-    private void AdvanceMantle()
-    {
-        if (mantleJumpCancelRequested)
-        {
-            mantleJumpCancelRequested = false;
-            FinishMantle();
-            rb.linearVelocity = new Vector2(0f, mantleJumpForce);
-            isJumping = false;
-            jumpSteps = 0;
-            return;
-        }
-
-        switch (mantlePhase)
-        {
-            case MantlePhase.Rising:
-            {
-                float t = AdvanceMantlePhaseTime();
-                float nextY = Mathf.Lerp(
-                    mantlePhaseStart.y,
-                    mantlePhaseTarget.y,
-                    EvaluateMantleCurve(t));
-                bool pathClear = IsMantleForwardPathClear(nextY);
-
-                if (!pathClear || nextY < mantleTarget.y)
-                {
-                    rb.MovePosition(new Vector2(rb.position.x, nextY));
-                    if (t >= 1f)
-                    {
-                        FinishMantle();
-                        return;
-                    }
-                    return;
-                }
-
-                rb.MovePosition(new Vector2(rb.position.x, nextY));
-                BeginMantlePhase(
-                    MantlePhase.MovingForward,
-                    new Vector2(rb.position.x, nextY),
-                    new Vector2(mantleTarget.x, nextY));
-                return;
-            }
-            case MantlePhase.MovingForward:
-            {
-                float t = AdvanceMantlePhaseTime();
-                float nextX = Mathf.Lerp(
-                    mantlePhaseStart.x,
-                    mantlePhaseTarget.x,
-                    EvaluateMantleCurve(t));
-                rb.MovePosition(new Vector2(nextX, rb.position.y));
-
-                if (t >= 1f)
-                {
-                    BeginMantlePhase(
-                        MantlePhase.Descending,
-                        new Vector2(nextX, rb.position.y),
-                        mantleTarget);
-                }
-                return;
-            }
-            case MantlePhase.Descending:
-            {
-                float t = AdvanceMantlePhaseTime();
-                float nextY = Mathf.Lerp(
-                    mantlePhaseStart.y,
-                    mantlePhaseTarget.y,
-                    EvaluateMantleCurve(t));
-                rb.MovePosition(new Vector2(rb.position.x, nextY));
-
-                if (t >= 1f)
-                {
-                    rb.MovePosition(mantleTarget);
-                    FinishMantle();
-                }
-                return;
-            }
-        }
-    }
-
-    private void BeginMantlePhase(MantlePhase phase, Vector2 start, Vector2 target)
-    {
-        mantlePhase = phase;
-        mantlePhaseStart = start;
-        mantlePhaseTarget = target;
-        mantlePhaseElapsed = 0f;
-        mantlePhaseDuration = Mathf.Max(
-            Vector2.Distance(start, target) / Mathf.Max(mantleMoveSpeed, 0.01f),
-            Time.fixedDeltaTime);
-    }
-
-    private float AdvanceMantlePhaseTime()
-    {
-        mantlePhaseElapsed += Time.fixedDeltaTime;
-        return Mathf.Clamp01(mantlePhaseElapsed / mantlePhaseDuration);
-    }
-
-    private float EvaluateMantleCurve(float t)
-    {
-        return mantleMotionCurve == null
-            ? t
-            : Mathf.Clamp01(mantleMotionCurve.Evaluate(t));
-    }
-
-    private bool IsMantleForwardPathClear(float atHeight)
-    {
-        float distance = Mathf.Abs(mantleTarget.x - rb.position.x);
-        if (distance <= 0.01f)
-            return true;
-
-        Vector2 direction = mantleTarget.x > rb.position.x
-            ? Vector2.right
-            : Vector2.left;
-        float verticalOffset = atHeight - rb.position.y;
-        Bounds bounds = col.bounds;
-        float originX = direction.x > 0f
-            ? bounds.max.x + 0.01f
-            : bounds.min.x - 0.01f;
-        float castDistance = distance + 0.02f;
-        int blockingLayers = mantleObstacleLayers | whatIsGround;
-
-        for (int i = 0; i < 3; i++)
-        {
-            float y = Mathf.Lerp(bounds.min.y + 0.03f, bounds.max.y - 0.03f, i * 0.5f)
-                + verticalOffset;
-            if (Physics2D.Raycast(
-                    new Vector2(originX, y),
-                    direction,
-                    castDistance,
-                    blockingLayers))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private void FinishMantle()
-    {
-        isMantling = false;
-        rb.gravityScale = mantleOriginalGravity;
-        rb.interpolation = mantleOriginalInterpolation;
-        rb.linearVelocity = Vector2.zero;
-    }
-
     private void OnDrawGizmos()
     {
-        if (mantleHeadLevelCheckPoint != null)
-        {
-            Gizmos.color = Color.red;
-            Gizmos.DrawWireSphere(mantleHeadLevelCheckPoint.position, 0.05f);
-        }
 
+        Gizmos.color = Color.red;
         Vector2 rayOriginOne = (Vector2)transform.position + new Vector2(xRayOffsetLeft, 0);
         Vector2 rayOriginTwo = (Vector2)transform.position + new Vector2(xRayOffsetRight, 0);
-        Gizmos.color = Color.red;
-        Gizmos.DrawLine(transform.position, transform.position + new Vector3(0, -groundCheckDisance));
-        Gizmos.DrawLine(rayOriginOne, transform.position + new Vector3(xRayOffsetLeft, -groundCheckDisance));
-        Gizmos.DrawLine(rayOriginTwo, transform.position + new Vector3(xRayOffsetRight, -groundCheckDisance));
-
-        Gizmos.color = Color.red;
         Vector2 wallRayOrigin = transform.position;
         Vector2 wallRayOriginUpOne = wallRayOrigin + new Vector2(0, yRayOffsetUpOne);
         Vector2 wallRayOriginUpTwo = wallRayOrigin + new Vector2(0, yRayOffsetUpTwo);
@@ -757,41 +540,13 @@ public class PlayerBase : MonoBehaviour
         Vector2 wallRayOriginDownTwo = wallRayOrigin + new Vector2(0, yRayOffsetDownTwo);
         Vector2 wallRayOriginFive = wallRayOrigin + new Vector2(0, -0.1f);
         Vector2 wallRayEndOffset = (isFacingRight ? Vector2.right : Vector2.left) * wallCheckDistance;
+        Gizmos.DrawLine(transform.position, transform.position + new Vector3(0, -groundCheckDisance));
+        Gizmos.DrawLine(rayOriginOne, transform.position + new Vector3(xRayOffsetLeft, -groundCheckDisance));
+        Gizmos.DrawLine(rayOriginTwo, transform.position + new Vector3(xRayOffsetRight, -groundCheckDisance));
         Gizmos.DrawLine(wallRayOriginFive, wallRayOriginFive + wallRayEndOffset);
         Gizmos.DrawLine(wallRayOriginUpOne, wallRayOriginUpOne + wallRayEndOffset);
         Gizmos.DrawLine(wallRayOriginUpTwo, wallRayOriginUpTwo + wallRayEndOffset);
         Gizmos.DrawLine(wallRayOriginDownOne, wallRayOriginDownOne + wallRayEndOffset);
         Gizmos.DrawLine(wallRayOriginDownTwo, wallRayOriginDownTwo + wallRayEndOffset);
-        Vector2 mantleDirection = isFacingRight ? Vector2.right : Vector2.left;
-
-        if (mantleWallCheckPoint != null)
-        {
-            Gizmos.color = Color.red;
-            Gizmos.DrawWireSphere(mantleWallCheckPoint.position, mantleSearchRadius);
-
-            // This check is currently a raycast, so draw the ray too.
-            Gizmos.DrawLine(
-                mantleWallCheckPoint.position,
-                mantleWallCheckPoint.position + (Vector3)(mantleDirection * mantleCheckDistance));
-        }
-
-        if (mantleLedgeCheckPoint != null)
-        {
-            Gizmos.color = Color.red;
-            Gizmos.DrawWireSphere(mantleLedgeCheckPoint.position, mantleSearchRadius);
-
-            Gizmos.DrawLine(
-                mantleLedgeCheckPoint.position,
-                mantleLedgeCheckPoint.position + (Vector3)(mantleDirection * mantleCheckDistance));
-
-            Vector2 downRayOrigin =
-                (Vector2)mantleLedgeCheckPoint.position
-                + mantleDirection * mantleCheckDistance
-                + Vector2.up * mantleRayStartHeight;
-
-            Gizmos.DrawLine(
-                downRayOrigin,
-                downRayOrigin + Vector2.down * (mantleRayLength + mantleRayStartHeight));
-        }
     }
 }
